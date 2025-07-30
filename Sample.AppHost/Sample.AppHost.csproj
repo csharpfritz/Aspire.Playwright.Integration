@@ -13,7 +13,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Sample.ApiService\Sample.ApiService.csproj" />
     <ProjectReference Include="..\Sample.Web\Sample.Web.csproj" />
-    <ProjectReference Include="..\Aspire.Hosting.Playwright\Aspire.Hosting.Playwright.csproj" />
+    <ProjectReference Include="..\Sample.Tests\Sample.Tests.csproj" />
+    <ProjectReference Include="..\Aspire.Hosting.Playwright\Aspire.Hosting.Playwright.csproj" IsAspireProjectResource="false" />
   </ItemGroup>
 
   <ItemGroup>
