@@ -1,47 +1,44 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
+using Xunit;
+using Xunit.Abstractions;
 
 namespace Sample.Tests;
 
-public class CounterPageTests
+/// <summary>
+/// Test collection to ensure PlaywrightFixture is shared across all tests.
+/// This ensures only one browser connection is created for all tests.
+/// </summary>
+[Collection("Playwright")]
+public class CounterPageTests : IClassFixture<PlaywrightFixture>
 {
-    private readonly IConfiguration _configuration;
+    private readonly PlaywrightFixture _fixture;
     private readonly ILogger<CounterPageTests> _logger;
+    private readonly ITestOutputHelper _output;
 
-    public CounterPageTests(IConfiguration configuration, ILogger<CounterPageTests> logger)
+    public CounterPageTests(PlaywrightFixture fixture, ITestOutputHelper output)
     {
-        _configuration = configuration;
-        _logger = logger;
+        _fixture = fixture;
+        _logger = fixture.LoggerFactory.CreateLogger<CounterPageTests>();
+        _output = output;
     }
 
+    [Fact]
     public async Task CounterPage_ClickButton_IncrementsCounter()
     {
-
-        // Create Playwright instance and connect to remote server using Aspire service discovery
-        using var playwright = await Playwright.CreateAsync();
-        
-        // Use the extension method to connect with built-in retry logic and metrics
-        await using var browser = await playwright.ConnectToPlaywrightServiceAsync();
-
-        _logger.LogInformation("Connected to Playwright browser");
-
-        // Create a new page with options to ignore SSL certificate errors
-        // This is necessary when connecting from container to host machine with development certificates
-        var page = await browser.NewPageAsync(new BrowserNewPageOptions
-        {
-            IgnoreHTTPSErrors = true
-        });
+        // Arrange
+        var page = await _fixture.CreatePageAsync();
+        _output.WriteLine("🧪 Starting counter increment test...");
 
         try
         {
-            // Navigate to the Counter page
-         
+            // Act - Navigate to the Counter page
             await page.GotoAspireResourcePageAsync("webfrontend", "/counter", new PageGotoOptions { Timeout = 15000 });
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle, new PageWaitForLoadStateOptions { Timeout = 15000 });
 
             _logger.LogInformation("Page loaded successfully");
+            _output.WriteLine("✅ Page loaded successfully");
 
             // Verify we're on the counter page
             var pageTitle = await page.TitleAsync();
@@ -75,14 +72,12 @@ public class CounterPageTests
             _logger.LogInformation("Updated counter text: {UpdatedCount}", updatedCountText);
             _logger.LogInformation("Updated count value: {UpdatedCountValue}", updatedCount);
 
-            // Assert that the counter incremented by 1
-            if (updatedCount != initialCount + 1)
-            {
-                throw new InvalidOperationException($"Counter test failed! Expected {initialCount + 1}, but got {updatedCount}");
-            }
+            // Assert - Use proper xUnit assertions
+            Assert.Equal(initialCount + 1, updatedCount);
 
             _logger.LogInformation("✅ Counter test passed! Counter incremented from {Initial} to {Updated}", 
                 initialCount, updatedCount);
+            _output.WriteLine($"✅ Counter incremented from {initialCount} to {updatedCount}");
 
             // Click the button a few more times to make sure it keeps working
             for (int i = 0; i < 3; i++)
@@ -95,12 +90,12 @@ public class CounterPageTests
             var finalCount = ExtractCountFromText(finalCountText);
 
             _logger.LogInformation("After clicking 3 more times, final count: {FinalCount}", finalCount);
-            if (finalCount != initialCount + 4)
-            {
-                throw new InvalidOperationException($"Multiple clicks test failed! Expected {initialCount + 4}, but got {finalCount}");
-            }
+            
+            // Assert final count is correct
+            Assert.Equal(initialCount + 4, finalCount);
 
             _logger.LogInformation("✅ All counter tests passed!");
+            _output.WriteLine($"✅ Final count after multiple clicks: {finalCount}");
         }
         finally
         {
