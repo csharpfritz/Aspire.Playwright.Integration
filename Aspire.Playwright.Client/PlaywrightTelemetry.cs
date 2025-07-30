@@ -12,13 +12,4 @@ public static class PlaywrightTelemetry
 	internal static readonly Counter<int> ConnectionFailures = Meter.CreateCounter<int>("playwright.connection.failures");
 	internal static readonly Histogram<double> ConnectionDuration = Meter.CreateHistogram<double>("playwright.connection.duration", "ms");
 
-	public static MeterProviderBuilder AddPlaywrightInstrumentation(this MeterProviderBuilder builder)
-	{
-		ArgumentNullException.ThrowIfNull(builder, nameof(builder));
-
-		builder.AddMeter(ActivitySource.Name);
-
-		return builder;
-	}
-
 }

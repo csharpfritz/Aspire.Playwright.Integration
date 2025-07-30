@@ -2,12 +2,10 @@ using Aspire.Hosting.Playwright;
 using Aspire.Playwright.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Playwright;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 
 namespace Microsoft.Extensions.Hosting;
 
@@ -35,12 +33,13 @@ public static class PlaywrightClientExtensions
 		builder.Services.AddOpenTelemetry()
 						.WithMetrics(metrics =>
 						{
-							metrics.AddPlaywrightInstrumentation();
+							metrics.AddMeter(PlaywrightTelemetry.Meter.Name);
 						})
 						.WithTracing(tracing =>
 						{
 							tracing.AddSource(PlaywrightTelemetry.ActivitySource.Name);
 						});
+		//builder.Services.AddOpenTelemetry().UseOtlpExporter();
 
 		var options = new PlaywrightConnectionOptions
 		{
@@ -202,13 +201,13 @@ public static class PlaywrightClientExtensions
 		try
 		{
 			Uri resourceUrl = playwrightService.ResolveResourceUrl(aspireResourceName);
-			
+
 			// Normalize and validate the relative URL
 			string normalizedRelativeUrl = NormalizeRelativeUrl(relativeUrl);
-			
+
 			// Use Uri constructor for safer URL combination
 			var finalUri = new Uri(resourceUrl, normalizedRelativeUrl);
-			
+
 			return page.GotoAsync(finalUri.ToString(), options ?? new PageGotoOptions());
 		}
 		catch (UriFormatException ex)

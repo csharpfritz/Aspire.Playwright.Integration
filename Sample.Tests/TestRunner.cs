@@ -1,140 +1,156 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 using System.Reflection;
+using Xunit.Runners;
 
 namespace Sample.Tests;
 
 /// <summary>
-/// Program entry point for running tests programmatically using dotnet test.
+/// Program entry point for running tests programmatically using xUnit's programmatic runner.
 /// This allows running all xUnit tests when the console application is launched.
 /// </summary>
 public class TestRunner
 {
-    public static async Task Main(string[] args)
-    {
-        // Build host for dependency injection
-        var builder = Host.CreateApplicationBuilder(args);
-        builder.AddServiceDefaults();
-        builder.AddPlaywright("playwright");
-        
-        var host = builder.Build();
-        host.UsePlaywright();
+	private static bool _testsFailed = false;
+	private static int _totalTests = 0;
+	private static int _passedTests = 0;
+	private static int _failedTests = 0;
+	private static int _skippedTests = 0;
 
-        var logger = host.Services.GetRequiredService<ILogger<TestRunner>>();
-        
-        logger.LogInformation("🎬 Starting Playwright end-to-end tests programmatically...");
-        
-        try
-        {
-            // Get the directory of the current assembly (test project)
-            var assemblyLocation = Assembly.GetExecutingAssembly().Location;
-            var projectDirectory = Path.GetDirectoryName(assemblyLocation);
-            
-            // Find the .csproj file in the project directory or parent directories
-            var csprojPath = FindProjectFile(projectDirectory!);
-            
-            if (csprojPath == null)
-            {
-                logger.LogError("❌ Could not find .csproj file to run tests");
-                Environment.Exit(1);
-                return;
-            }
+	public static async Task Main(string[] args)
+	{
+		// Build host for dependency injection - but don't try to connect to Playwright yet
+		var builder = Host.CreateApplicationBuilder(args);
 
-            // Run tests using dotnet test command
-            var testResults = await RunDotnetTestAsync(csprojPath, logger);
-            
-            if (testResults.ExitCode != 0)
-            {
-                logger.LogError("❌ Tests failed with exit code {ExitCode}", testResults.ExitCode);
-                Environment.Exit(testResults.ExitCode);
-            }
-            else
-            {
-                logger.LogInformation("✅ All tests passed successfully!");
-                Environment.Exit(0);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "💥 Error running tests");
-            Environment.Exit(1);
-        }
-    }
+		// Only add Playwright if the connection string is available
+		var configuration = builder.Configuration;
+		var playwrightConnectionString = configuration.GetConnectionString("playwright");
+		if (!string.IsNullOrEmpty(playwrightConnectionString))
+		{
+			builder.AddPlaywright("playwright");
+		}
+		builder.AddServiceDefaults();
 
-    private static string? FindProjectFile(string startDirectory)
-    {
-        var currentDir = new DirectoryInfo(startDirectory);
-        
-        while (currentDir != null)
-        {
-            var csprojFiles = currentDir.GetFiles("*.csproj");
-            if (csprojFiles.Length > 0)
-            {
-                return csprojFiles[0].FullName;
-            }
-            
-            currentDir = currentDir.Parent;
-        }
-        
-        return null;
-    }
+		var host = builder.Build();
 
-    private static async Task<TestResults> RunDotnetTestAsync(string projectPath, ILogger logger)
-    {
-        logger.LogInformation("🏃 Running dotnet test on project: {ProjectPath}", projectPath);
-        
-        var processStartInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"test \"{projectPath}\" --logger \"console;verbosity=detailed\" --no-build --no-restore",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
+		// Only initialize Playwright if it was added
+		if (!string.IsNullOrEmpty(playwrightConnectionString))
+		{
+			host.UsePlaywright();
+		}
 
-        var process = new Process { StartInfo = processStartInfo };
-        var outputLines = new List<string>();
-        var errorLines = new List<string>();
+		var logger = host.Services.GetRequiredService<ILogger<TestRunner>>();
 
-        process.OutputDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-            {
-                outputLines.Add(e.Data);
-                logger.LogInformation("📄 {Output}", e.Data);
-            }
-        };
+		logger.LogInformation("🎬 Starting Playwright end-to-end tests programmatically...");
 
-        process.ErrorDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-            {
-                errorLines.Add(e.Data);
-                logger.LogError("❗ {Error}", e.Data);
-            }
-        };
+		// Log OpenTelemetry configuration for debugging
+		var otelEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+		if (!string.IsNullOrEmpty(otelEndpoint))
+		{
+			logger.LogInformation("📊 OpenTelemetry OTLP endpoint detected: {Endpoint}", otelEndpoint);
+		}
+		else
+		{
+			logger.LogWarning("⚠️ No OTEL_EXPORTER_OTLP_ENDPOINT found - metrics will use console exporter only");
+		}
 
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+		try
+		{
+			// Get the current assembly containing the tests
+			var testAssembly = Assembly.GetExecutingAssembly();
 
-        await process.WaitForExitAsync();
+			logger.LogInformation("🏃 Running xUnit tests from assembly: {AssemblyName}", testAssembly.GetName().Name);
 
-        return new TestResults
-        {
-            ExitCode = process.ExitCode,
-            Output = outputLines,
-            Errors = errorLines
-        };
-    }
+			// Create and configure the xUnit test runner
+			using var runner = AssemblyRunner.WithoutAppDomain(testAssembly.Location);
 
-    private class TestResults
-    {
-        public int ExitCode { get; set; }
-        public List<string> Output { get; set; } = new();
-        public List<string> Errors { get; set; } = new();
-    }
+			// Set up event handlers for test results
+			runner.OnDiscoveryComplete = OnDiscoveryComplete;
+			runner.OnExecutionComplete = OnExecutionComplete;
+			runner.OnTestFailed = OnTestFailed;
+			runner.OnTestPassed = OnTestPassed;
+			runner.OnTestSkipped = OnTestSkipped;
+
+			// Start the test run
+			runner.Start();
+
+			// Wait for completion
+			var completionSource = new TaskCompletionSource<bool>();
+			runner.OnExecutionComplete = info =>
+			{
+				OnExecutionComplete(info);
+				completionSource.SetResult(true);
+			};
+
+			await completionSource.Task;
+
+			// Log final results
+			logger.LogInformation("📊 Test Results Summary:");
+			logger.LogInformation("   Total: {Total}", _totalTests);
+			logger.LogInformation("   ✅ Passed: {Passed}", _passedTests);
+			logger.LogInformation("   ❌ Failed: {Failed}", _failedTests);
+			logger.LogInformation("   ⏭️ Skipped: {Skipped}", _skippedTests);
+
+			if (_testsFailed)
+			{
+				logger.LogError("❌ Some tests failed!");
+				Environment.Exit(1);
+			}
+			else
+			{
+				logger.LogInformation("✅ All tests passed successfully!");
+				Environment.Exit(0);
+			}
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "💥 Error running tests");
+			Environment.Exit(1);
+		}
+	}
+
+	private static void OnDiscoveryComplete(DiscoveryCompleteInfo info)
+	{
+		Console.WriteLine($"🔍 Discovery complete: Found {info.TestCasesToRun} tests to run");
+		_totalTests = info.TestCasesToRun;
+	}
+
+	private static void OnExecutionComplete(ExecutionCompleteInfo info)
+	{
+		Console.WriteLine($"� Execution complete: {info.TotalTests} total, {info.TestsFailed} failed, {info.TestsSkipped} skipped");
+		_testsFailed = info.TestsFailed > 0;
+	}
+
+	private static void OnTestPassed(TestPassedInfo info)
+	{
+		_passedTests++;
+		Console.WriteLine($"✅ PASS: {info.TestDisplayName} ({info.ExecutionTime:F3}s)");
+	}
+
+	private static void OnTestFailed(TestFailedInfo info)
+	{
+		_failedTests++;
+		_testsFailed = true;
+		Console.WriteLine($"❌ FAIL: {info.TestDisplayName} ({info.ExecutionTime:F3}s)");
+		if (!string.IsNullOrEmpty(info.ExceptionMessage))
+		{
+			Console.WriteLine($"   Error: {info.ExceptionMessage}");
+		}
+		if (!string.IsNullOrEmpty(info.ExceptionStackTrace))
+		{
+			Console.WriteLine($"   Stack Trace: {info.ExceptionStackTrace}");
+		}
+	}
+
+	private static void OnTestSkipped(TestSkippedInfo info)
+	{
+		_skippedTests++;
+		Console.WriteLine($"⏭️ SKIP: {info.TestDisplayName}");
+		if (!string.IsNullOrEmpty(info.SkipReason))
+		{
+			Console.WriteLine($"   Reason: {info.SkipReason}");
+		}
+	}
 }
